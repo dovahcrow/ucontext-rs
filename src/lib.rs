@@ -3,12 +3,10 @@
 #![feature(asm)]
 extern crate libc;
 use libc::*;
-use std::mem::transmute;
-
 pub use u_context::*;
 
 #[derive(Show)]
-enum UErr {
+pub enum UErr {
     Fail,
 }
 
@@ -19,18 +17,18 @@ extern "C" {
     pub fn swapcontext(oucp: *mut UContext, ucp: *const UContext) -> c_int;
     // dunno how to bind var-arg function
     // TODO
-    pub fn makecontext(ucp: *const UContext, f: fn(), argc: c_int);
+    pub fn makecontext(ucp: *const UContext, f: fn(), args: c_int);
 }
 
 #[cfg(all(target_os="linux", target_arch="x86_64"))]
 mod u_context {
     use libc::*;
-    use std::mem::transmute;
-    use std::mem::swap;
+    use std::mem::*;
     use std::default::Default;
     
     pub const SIGSET_NWORDS: usize = (1024 / 64);
 
+    #[repr(C)]
     pub struct Stack {
         pub ss_sp: *const (),
         pub ss_flags: c_int,
@@ -95,43 +93,51 @@ mod u_context {
             ctx
         }
     }
+
     
     impl UContext {
-        
+        pub fn new() -> UContext {
+            Default::default()
+        }
         // I dunno how to bind to c's var-arg function,so it is a
         // TODO
-        pub fn make_context(f: fn()) -> UContext {
-            let u = Default::default();
+        pub fn make_context(&mut self, f: fn()) -> () {
             unsafe {
-                ::makecontext(&u, f, 0);
+                ::makecontext(self, f, 0);
             }
-            u
         }
-        pub fn get_context(&mut self) {
-            unsafe { ::getcontext(self) };
-
-            // fix the offset, because of the indirection of get_context
-            self.mcontext.g_reg_set[15] += 0x50i64; //rsp + 0x50 (0x50)
+        pub fn get_context() -> Result<UContext,::UErr> {
+            let mut ctx = UContext::new();
+                            
+            let ret = unsafe { ::getcontext(&mut ctx) };
+            if ret == -1 {
+                return Err(::UErr::Fail);
+            }
             
-            // rbp@0x50(rsp)
+            // fix the offset, because of the indirection of get_context
+            ctx.mcontext.g_reg_set[15] += 0x440i64; //rsp + 0x440 (0x430 + 0x10)
+            
+            // rbp@0x430(rsp)
             let mut rbp;
-            unsafe {asm!(r"mov 0x50(%rsp), $0":"=r"(rbp));};
-            self.mcontext.g_reg_set[10] = rbp; //rbp
+            unsafe {asm!(r"mov 0x430(%rsp), $0":"=r"(rbp));};
+            ctx.mcontext.g_reg_set[10] = rbp; //rbp
 
-            // rip@0x58(rsp)
+            // rip@0x438(rsp)
             let mut rip;
-            unsafe {asm!(r"mov 0x58(%rsp), $0":"=r"(rip));};
-            self.mcontext.g_reg_set[16] = rip;//rip
+            unsafe {asm!(r"mov 0x438(%rsp), $0":"=r"(rip));};
+            ctx.mcontext.g_reg_set[16] = rip;//rip
+            Ok(ctx)
         }
         
         pub fn set_context(&self) {
             unsafe { ::setcontext(self) };
         }
+        
         pub fn swap_context(&mut self, ctx: &UContext) {
             unsafe { ::getcontext(self) };
 
             // fix the offset, because of the indirection of get_context
-            self.mcontext.g_reg_set[15] += 0x70i64; //rsp + 0x50 (0x50)
+            self.mcontext.g_reg_set[15] += 0x80i64; //rsp + 0x80 (0x80)
             
             // rbp@0x70(rsp)
             let mut rbp;
@@ -145,6 +151,17 @@ mod u_context {
 
             unsafe { ::setcontext(ctx) };
         }
+        
+        pub fn set_stack(&mut self, stack: &mut [usize]) {
+            let (stack_ptr, stack_len): (*const _, u64) = unsafe { transmute(stack) };
+            self.stack.ss_sp = stack_ptr;
+            self.stack.ss_size = stack_len * 8;
+            self.stack.ss_flags = 0;
+        }
+        pub fn set_link(&mut self, link: &UContext) {
+            self.link = link;
+        }
+        
         
     }
 }

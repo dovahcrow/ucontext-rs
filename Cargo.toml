@@ -1,7 +1,7 @@
 [package]
 
 name = "ucontext"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["wooya <doomsplayer@gmail.com>"]
 description = "glibc's ucontext binding for rust"
 keywords = ["coroutine", "ucontext"]
