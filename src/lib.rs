@@ -149,6 +149,7 @@ mod u_context {
     }
 }
 
+// not complete
 #[cfg(all(target_os="linux", not(target_arch="x86_64")))]
 mod u_context {
     use libc::*;
