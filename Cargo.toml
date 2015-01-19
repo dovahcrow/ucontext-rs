@@ -1,0 +1,21 @@
+[package]
+
+name = "ucontext"
+version = "0.0.1"
+authors = ["wooya <doomsplayer@gmail.com>"]
+description = "glibc's ucontext binding for rust"
+keywords = ["coroutine", "ucontext"]
+license = "MIT"
+repository = "https://github.com/doomsplayer/ucontext-rs"
+readme = "README.md"
+documentation = "https://github.com/doomsplayer/ucontext-rs/blob/master/README.md"
+homepage = "https://github.com/doomsplayer/ucontext-rs"
+
+[[bin]]
+path = "src/example.rs"
+name = "example"
+
+[lib]
+path = "src/lib.rs"
+name = "ucontext"
+
