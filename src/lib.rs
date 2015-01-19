@@ -80,11 +80,11 @@ mod u_context {
 
     #[repr(C)]
     pub struct UContext {
-        pub flags: c_ulong,
-        pub link: *const UContext,
-        pub stack: Stack,
+        flags: c_ulong,
+        link: *const UContext,
+        stack: Stack,
         mcontext: MContext,
-        pub sigmask: [c_ulong;SIGSET_NWORDS],
+        sigmask: [c_ulong;SIGSET_NWORDS],
         fp_regs_mem: FpState,
     }
 
@@ -97,6 +97,7 @@ mod u_context {
     }
     
     impl UContext {
+        
         // I dunno how to bind to c's var-arg function,so it is a
         // TODO
         pub fn make_context(f: fn()) -> UContext {
@@ -122,9 +123,29 @@ mod u_context {
             unsafe {asm!(r"mov 0x58(%rsp), $0":"=r"(rip));};
             self.mcontext.g_reg_set[16] = rip;//rip
         }
+        
         pub fn set_context(&self) {
             unsafe { ::setcontext(self) };
         }
+        pub fn swap_context(&mut self, ctx: &UContext) {
+            unsafe { ::getcontext(self) };
+
+            // fix the offset, because of the indirection of get_context
+            self.mcontext.g_reg_set[15] += 0x70i64; //rsp + 0x50 (0x50)
+            
+            // rbp@0x70(rsp)
+            let mut rbp;
+            unsafe {asm!(r"mov 0x70(%rsp), $0":"=r"(rbp));};
+            self.mcontext.g_reg_set[10] = rbp; //rbp
+
+            // rip@0x78(rsp)
+            let mut rip;
+            unsafe {asm!(r"mov 0x78(%rsp), $0":"=r"(rip));};
+            self.mcontext.g_reg_set[16] = rip;//rip
+
+            unsafe { ::setcontext(ctx) };
+        }
+        
     }
 }
 
