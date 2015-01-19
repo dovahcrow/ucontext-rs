@@ -29,7 +29,7 @@ fn ctest() {
     let mut child = UContext::get_context().unwrap();
     child.set_stack(a);
     let mut main = UContext::new();
-    //unsafe {child.set_link(transmute(0is));};
+    child.set_link(&main);
     
     child.make_context(ss);
     
