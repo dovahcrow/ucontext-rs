@@ -15,8 +15,8 @@ fn ctest() {
     child.set_stack(start as *const u8, (start + 4096) as *const u8);
     let mut main = UContext::new();
     child.set_link(&main);
-    
-    child.make_context(move|| println!("closure invoked!"));
+    let captured_value = "hehehe".to_string();
+    child.make_context(move|| println!("closure invoked!, captured: {}", captured_value));
 
     unsafe{swapcontext(&mut main, &child);};
 
