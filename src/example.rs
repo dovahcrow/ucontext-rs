@@ -7,37 +7,18 @@ fn main() {
     ctest();
 }
 
-fn dtest() {
-    let mut i = 0;
-    if let Ok(a) = UContext::get_context() {
-        if i != 2 {
-            println!("le");
-            i += 1;
-        } else {
-            return;
-        }
-        a.set_context();
-    } else {
-        println!("get context fail");
-    }
-    
-}
-
-        
 fn ctest() {
+    let mut child = UContext::new();
+    unsafe {getcontext(&mut child);}
     let a = &mut [0us;4096];
-    let mut child = UContext::get_context().unwrap();
-    child.set_stack(a);
+    let start: u64 = unsafe {transmute(a)};
+    child.set_stack(start as *const u8, (start + 4096) as *const u8);
     let mut main = UContext::new();
     child.set_link(&main);
     
-    child.make_context(ss);
-    
-    main.swap_context(&child);
+    child.make_context(move|| println!("closure invoked!"));
+
+    unsafe{swapcontext(&mut main, &child);};
+
     println!("main done");
 }
-
-fn ss() {
-    println!("I am sub thread");
-}
-

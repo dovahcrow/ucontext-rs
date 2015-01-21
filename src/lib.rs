@@ -4,20 +4,24 @@
 extern crate libc;
 use libc::*;
 pub use u_context::*;
-
-#[derive(Show)]
-pub enum UErr {
-    Fail,
-}
+pub type InitFn = extern "C" fn();
 
 #[link = "glibc"]
 extern "C" {
+    // because get/swap context depends rbp/rsp strictly, we cannot provide a binding. Any indirection will break the code(during optimization).
     pub fn getcontext(ucp: *mut UContext) -> c_int;
-    pub fn setcontext(ucp: *const UContext) -> c_int;
     pub fn swapcontext(oucp: *mut UContext, ucp: *const UContext) -> c_int;
-    // dunno how to bind var-arg function
-    // TODO
-    pub fn makecontext(ucp: *const UContext, f: fn(), args: c_int);
+    
+    fn setcontext(ucp: *const UContext);
+    fn makecontext(ucp: *const UContext, f: InitFn, args: c_int, argv: *const c_void);
+}
+
+extern "C" fn bridge_to_c(func: *mut c_void) {
+    use std::mem::transmute;
+    use std::thunk::Thunk;
+    
+    let f: Box<Thunk> = unsafe {transmute(func)};
+    f.invoke(());
 }
 
 #[cfg(all(target_os="linux", target_arch="x86_64"))]
@@ -25,11 +29,12 @@ mod u_context {
     use libc::*;
     use std::mem::*;
     use std::default::Default;
-    
-    pub const SIGSET_NWORDS: usize = (1024 / 64);
+    use std::thunk::Thunk;
+
+    const SIGSET_NWORDS: usize = (1024 / 64);
 
     #[repr(C)]
-    pub struct Stack {
+    struct Stack {
         pub ss_sp: *const (),
         pub ss_flags: c_int,
         pub ss_size: size_t,
@@ -41,19 +46,19 @@ mod u_context {
     // rsp is #15 and rip is #16
     
     #[repr(C)]
-    pub struct FpxReg {
+    struct FpxReg {
         significand: [c_ushort;4],
         exponent: c_ushort,
         padding: [c_ushort;3],
     }
 
     #[repr(C)]
-    pub struct XmmReg {
+    struct XmmReg {
         element: [u32;4],
     }
 
     #[repr(C)]
-    pub struct FpState {
+    struct FpState {
         cwd: u16,
         swd: u16,
         ftw: u16,
@@ -67,10 +72,10 @@ mod u_context {
         padding: [u32;24],
     }
 
-    pub type FpRegSet = *const FpState;
+    type FpRegSet = *const FpState;
 
     #[repr(C)]
-    pub struct MContext {
+    struct MContext {
         g_reg_set: GRegSet,
         fp_regs: FpRegSet,
         reserved1: [c_ulonglong;8],
@@ -99,69 +104,28 @@ mod u_context {
         pub fn new() -> UContext {
             Default::default()
         }
-        // I dunno how to bind to c's var-arg function,so it is a
-        // TODO
-        pub fn make_context(&mut self, f: fn()) -> () {
-            unsafe {
-                ::makecontext(self, f, 0);
-            }
-        }
-        pub fn get_context() -> Result<UContext,::UErr> {
-            let mut ctx = UContext::new();
-                            
-            let ret = unsafe { ::getcontext(&mut ctx) };
-            if ret == -1 {
-                return Err(::UErr::Fail);
-            }
-            
-            // fix the offset, because of the indirection of get_context
-            ctx.mcontext.g_reg_set[15] += 0x440i64; //rsp + 0x440 (0x430 + 0x10)
-            
-            // rbp@0x430(rsp)
-            let mut rbp;
-            unsafe {asm!(r"mov 0x430(%rsp), $0":"=r"(rbp));};
-            ctx.mcontext.g_reg_set[10] = rbp; //rbp
 
-            // rip@0x438(rsp)
-            let mut rip;
-            unsafe {asm!(r"mov 0x438(%rsp), $0":"=r"(rip));};
-            ctx.mcontext.g_reg_set[16] = rip;//rip
-            Ok(ctx)
+        pub fn make_context<F>(&mut self, f: F) -> () where F: Send + FnOnce() {
+            let thk = Thunk::new(f);
+            unsafe {
+                ::makecontext(self, transmute(::bridge_to_c), 1, transmute(Box::new(thk)));
+            }
         }
         
         pub fn set_context(&self) {
             unsafe { ::setcontext(self) };
         }
         
-        pub fn swap_context(&mut self, ctx: &UContext) {
-            unsafe { ::getcontext(self) };
-
-            // fix the offset, because of the indirection of get_context
-            self.mcontext.g_reg_set[15] += 0x80i64; //rsp + 0x80 (0x80)
-            
-            // rbp@0x70(rsp)
-            let mut rbp;
-            unsafe {asm!(r"mov 0x70(%rsp), $0":"=r"(rbp));};
-            self.mcontext.g_reg_set[10] = rbp; //rbp
-
-            // rip@0x78(rsp)
-            let mut rip;
-            unsafe {asm!(r"mov 0x78(%rsp), $0":"=r"(rip));};
-            self.mcontext.g_reg_set[16] = rip;//rip
-
-            unsafe { ::setcontext(ctx) };
-        }
-        
-        pub fn set_stack(&mut self, stack: &mut [usize]) {
-            let (stack_ptr, stack_len): (*const _, u64) = unsafe { transmute(stack) };
-            self.stack.ss_sp = stack_ptr;
+        pub fn set_stack(&mut self, start: *const u8, end: *const u8) {
+            let (stack_ptr, stack_len) = (start, end as u64 - start as u64);
+            self.stack.ss_sp = stack_ptr as *const ();
             self.stack.ss_size = stack_len * 8;
             self.stack.ss_flags = 0;
         }
+        
         pub fn set_link(&mut self, link: &UContext) {
             self.link = link;
         }
-        
         
     }
 }
@@ -189,13 +153,13 @@ mod u_context {
     type GRegSet = [GReg;NGREG];
 
     #[repr(C)]
-    pub struct FpReg {
+    struct FpReg {
         significand: [c_ushort;4],
         exponent: c_ushort,
     }
     
     #[repr(C)]
-    pub struct FpState {
+    struct FpState {
         cw: c_long,
         sw: c_long,
         tag: c_long,
@@ -211,7 +175,7 @@ mod u_context {
 
     
     #[repr(C)]
-    pub struct MContext {
+    struct MContext {
         g_regs: GRegSet,
         fpregs: FpRegSet,
         oldmask: c_ulong,
